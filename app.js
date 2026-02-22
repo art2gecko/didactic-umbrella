@@ -238,9 +238,17 @@ function handleFiles(newFiles, tool) {
     } else {
         state.files = [...state.files, ...newFiles];
     }
-    renderFileList(tool);
-    renderOptions(tool);
-    showActionBar(tool);
+
+    // Show interactive preview for single-PDF tools
+    const isPdfFile = state.files.length > 0 && state.files[0].type === 'application/pdf';
+    const isSinglePdfTool = tool.accept === '.pdf' && !tool.multi && isPdfFile;
+    if (isSinglePdfTool) {
+        showPdfPreview(tool);
+    } else {
+        renderFileList(tool);
+        renderOptions(tool);
+        showActionBar(tool);
+    }
 }
 
 function renderFileList(tool) {
@@ -1382,6 +1390,242 @@ function parsePageRanges(input, totalPages) {
     });
 
     return Array.from(pages).sort((a, b) => a - b);
+}
+
+// ── PDF Preview ───────────────────────────────────────────────────
+async function showPdfPreview(tool) {
+    const file = state.files[0];
+    const arrayBuffer = await readFileAsArrayBuffer(file);
+    state._previewBytes = new Uint8Array(arrayBuffer);
+
+    // Get page count from pdf-lib (fast, no rendering)
+    let pageCount = 0;
+    try {
+        const doc = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+        pageCount = doc.getPageCount();
+    } catch (e) {
+        // Fallback: skip preview and go straight to normal flow
+        renderFileList(tool);
+        renderOptions(tool);
+        showActionBar(tool);
+        return;
+    }
+
+    state._previewPageCount = pageCount;
+
+    // Build the preview modal overlay
+    let existing = document.getElementById('pdfPreviewOverlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'pdfPreviewOverlay';
+    overlay.className = 'pdf-preview-overlay';
+
+    overlay.innerHTML = `
+        <div class="pdf-preview-modal">
+            <div class="pdf-preview-header">
+                <div class="pdf-preview-file-info">
+                    <span class="pdf-preview-icon">📄</span>
+                    <div>
+                        <div class="pdf-preview-filename">${escapeHtml(file.name)}</div>
+                        <div class="pdf-preview-meta">${pageCount} page${pageCount !== 1 ? 's' : ''} &middot; ${formatSize(file.size)}</div>
+                    </div>
+                </div>
+                <button class="pdf-preview-close" id="previewClose">&times;</button>
+            </div>
+            <div class="pdf-preview-body">
+                <div class="pdf-preview-pages" id="previewPages">
+                    <div class="pdf-preview-loading">Loading preview...</div>
+                </div>
+                <div class="pdf-preview-sidebar">
+                    <div class="pdf-preview-tool-info">
+                        <div class="card-icon ${tool.color}" style="width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:1.5rem;margin:0 auto 12px;">${tool.icon}</div>
+                        <h3>${tool.name}</h3>
+                        <p>${tool.desc}</p>
+                    </div>
+                    <div id="previewOptionsPanel" class="pdf-preview-options"></div>
+                    <button class="btn btn-primary btn-lg pdf-preview-action" id="previewProcessBtn">
+                        ${getToolActionLabel(tool)}
+                    </button>
+                    <button class="btn btn-secondary" id="previewChangeFile" style="width:100%;margin-top:8px;">Choose Different File</button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('active'));
+
+    // Render options inside the sidebar
+    const optionsPanel = document.getElementById('previewOptionsPanel');
+    const optionsMap = {
+        split: renderSplitOptions,
+        compress: renderCompressOptions,
+        rotate: renderRotateOptions,
+        watermark: renderWatermarkOptions,
+        'page-numbers': renderPageNumberOptions,
+        protect: renderProtectOptions,
+        unlock: renderUnlockOptions,
+        crop: renderCropOptions,
+        redact: renderRedactOptions,
+        edit: renderEditOptions,
+    };
+    const renderer = optionsMap[tool.id];
+    if (renderer) {
+        optionsPanel.innerHTML = renderer();
+        initRadioGroups();
+        initWatermarkPreview();
+        initSplitModeToggle();
+        initRotatePageToggle();
+    }
+
+    // Wire up close button
+    document.getElementById('previewClose').addEventListener('click', closePdfPreview);
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) closePdfPreview();
+    });
+
+    // Wire up process button
+    document.getElementById('previewProcessBtn').addEventListener('click', () => {
+        // Save option values from the modal before closing
+        const savedValues = {};
+        overlay.querySelectorAll('input, select').forEach(el => {
+            if (el.id) savedValues[el.id] = el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value;
+        });
+        const activeRadios = {};
+        overlay.querySelectorAll('.radio-option.active').forEach(el => {
+            const group = el.closest('.radio-group');
+            if (group && group.id) activeRadios[group.id] = el.dataset.value;
+        });
+
+        closePdfPreview();
+        renderFileList(tool);
+        renderOptions(tool);
+        showActionBar(tool);
+
+        // Restore saved option values into the main page
+        Object.entries(savedValues).forEach(([id, val]) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (el.type === 'checkbox' || el.type === 'radio') el.checked = val;
+            else el.value = val;
+        });
+        Object.entries(activeRadios).forEach(([groupId, activeVal]) => {
+            const group = document.getElementById(groupId);
+            if (!group) return;
+            group.querySelectorAll('.radio-option').forEach(opt => {
+                opt.classList.toggle('active', opt.dataset.value === activeVal);
+                const radio = opt.querySelector('input[type="radio"]');
+                if (radio) radio.checked = opt.dataset.value === activeVal;
+            });
+        });
+        // Re-init toggles so visibility matches restored state
+        initSplitModeToggle();
+        initRotatePageToggle();
+
+        // Auto-trigger processing
+        setTimeout(() => processFiles(tool), 150);
+    });
+
+    // Wire up change file button
+    document.getElementById('previewChangeFile').addEventListener('click', () => {
+        closePdfPreview();
+        state.files = [];
+    });
+
+    // Render PDF page thumbnails using PDF.js
+    renderPreviewThumbnails(file, pageCount);
+}
+
+async function renderPreviewThumbnails(file, pageCount) {
+    const container = document.getElementById('previewPages');
+    if (!container) return;
+
+    if (typeof pdfjsLib === 'undefined') {
+        container.innerHTML = `<div class="pdf-preview-no-render">
+            <div class="pdf-preview-page-grid">
+                ${Array.from({length: Math.min(pageCount, 20)}, (_, i) => `
+                    <div class="pdf-preview-page-placeholder">
+                        <span>Page ${i + 1}</span>
+                    </div>
+                `).join('')}
+            </div>
+            ${pageCount > 20 ? `<p class="pdf-preview-more">+ ${pageCount - 20} more pages</p>` : ''}
+        </div>`;
+        return;
+    }
+
+    try {
+        const arrayBuffer = await readFileAsArrayBuffer(file);
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        const maxPages = Math.min(pdf.numPages, 30);
+
+        container.innerHTML = `<div class="pdf-preview-page-grid" id="previewGrid"></div>
+            ${pdf.numPages > maxPages ? `<p class="pdf-preview-more">Showing ${maxPages} of ${pdf.numPages} pages</p>` : ''}`;
+        const grid = document.getElementById('previewGrid');
+
+        for (let i = 1; i <= maxPages; i++) {
+            const page = await pdf.getPage(i);
+            const viewport = page.getViewport({ scale: 0.5 });
+
+            const wrapper = document.createElement('div');
+            wrapper.className = 'pdf-preview-thumb';
+
+            const canvas = document.createElement('canvas');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            const ctx = canvas.getContext('2d');
+
+            await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+
+            const label = document.createElement('span');
+            label.className = 'pdf-preview-thumb-label';
+            label.textContent = i;
+
+            wrapper.appendChild(canvas);
+            wrapper.appendChild(label);
+            grid.appendChild(wrapper);
+        }
+    } catch (err) {
+        container.innerHTML = `<div class="pdf-preview-no-render">
+            <p>Could not render preview. The PDF may be encrypted or corrupted.</p>
+            <p style="font-size:0.8rem;color:var(--gray-400);margin-top:8px;">${escapeHtml(err.message)}</p>
+        </div>`;
+    }
+}
+
+function closePdfPreview() {
+    const overlay = document.getElementById('pdfPreviewOverlay');
+    if (overlay) {
+        overlay.classList.remove('active');
+        setTimeout(() => overlay.remove(), 200);
+    }
+}
+
+function getToolActionLabel(tool) {
+    const labels = {
+        merge: 'Merge PDFs',
+        split: 'Split PDF',
+        compress: 'Compress PDF',
+        rotate: 'Rotate PDF',
+        organize: 'Organize Pages',
+        watermark: 'Add Watermark',
+        'page-numbers': 'Add Page Numbers',
+        protect: 'Protect PDF',
+        unlock: 'Unlock PDF',
+        edit: 'Edit PDF',
+        sign: 'Sign PDF',
+        redact: 'Redact PDF',
+        repair: 'Repair PDF',
+        ocr: 'Run OCR',
+        crop: 'Crop PDF',
+        compare: 'Compare PDFs',
+        'convert/pdf-to-jpg': 'Convert to JPG',
+        'convert/pdf-to-word': 'Convert to Word',
+        'convert/pdf-to-excel': 'Convert to Excel',
+        'convert/pdf-to-ppt': 'Convert to PPT',
+    };
+    return labels[tool.id] || 'Process PDF';
 }
 
 // ── Init ──────────────────────────────────────────────────────────
