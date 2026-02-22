@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Tools - Free Online PDF Editor & Converter</title>
+    <meta name="description" content="Free online PDF tools to merge, split, compress, convert, rotate, unlock and watermark PDFs. No installation needed.">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="#/" class="logo">
+                <svg class="logo-icon" viewBox="0 0 32 32" width="32" height="32">
+                    <rect x="4" y="2" width="24" height="28" rx="2" fill="#e74c3c"/>
+                    <path d="M10 8h12M10 12h12M10 16h8" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>
+                    <text x="9" y="26" font-size="8" fill="#fff" font-weight="bold">PDF</text>
+                </svg>
+                <span>PDF Tools</span>
+            </a>
+            <div class="nav-links">
+                <div class="nav-dropdown">
+                    <button class="nav-btn">All PDF Tools <svg width="10" height="6" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg></button>
+                    <div class="dropdown-menu" id="toolsDropdown"></div>
+                </div>
+            </div>
+            <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">
+                <span></span><span></span><span></span>
+            </button>
+        </div>
+    </nav>
+
+    <main id="app"></main>
+
+    <footer class="footer">
+        <div class="footer-container">
+            <div class="footer-grid">
+                <div class="footer-col">
+                    <h4>PDF Tools</h4>
+                    <p>Free online tools to handle PDF files. No installation or registration needed. Fast, easy, and secure.</p>
+                </div>
+                <div class="footer-col">
+                    <h4>Popular Tools</h4>
+                    <ul>
+                        <li><a href="#/merge">Merge PDF</a></li>
+                        <li><a href="#/split">Split PDF</a></li>
+                        <li><a href="#/compress">Compress PDF</a></li>
+                        <li><a href="#/convert/pdf-to-jpg">PDF to JPG</a></li>
+                        <li><a href="#/convert/jpg-to-pdf">JPG to PDF</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>More Tools</h4>
+                    <ul>
+                        <li><a href="#/rotate">Rotate PDF</a></li>
+                        <li><a href="#/watermark">Watermark</a></li>
+                        <li><a href="#/page-numbers">Page Numbers</a></li>
+                        <li><a href="#/protect">Protect PDF</a></li>
+                        <li><a href="#/unlock">Unlock PDF</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>Convert</h4>
+                    <ul>
+                        <li><a href="#/convert/word-to-pdf">Word to PDF</a></li>
+                        <li><a href="#/convert/excel-to-pdf">Excel to PDF</a></li>
+                        <li><a href="#/convert/ppt-to-pdf">PPT to PDF</a></li>
+                        <li><a href="#/convert/html-to-pdf">HTML to PDF</a></li>
+                        <li><a href="#/convert/pdf-to-word">PDF to Word</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2026 PDF Tools. All files are processed securely in your browser.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
