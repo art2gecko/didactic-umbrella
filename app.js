@@ -90,6 +90,7 @@ function initDropdown() {
     ).join('');
 
     const btn = dropdown.parentElement.querySelector('.nav-btn');
+    if (!btn) return;
     btn.addEventListener('click', (e) => {
         e.stopPropagation();
         dropdown.classList.toggle('active');
@@ -683,6 +684,9 @@ async function processFiles(tool) {
     showProgress(0, 'Starting...');
 
     try {
+        if (typeof PDFLib === 'undefined') {
+            throw new Error('PDF library failed to load. Please check your internet connection and refresh the page.');
+        }
         const processors = {
             merge: processMerge,
             split: processSplit,
