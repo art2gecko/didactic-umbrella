@@ -803,6 +803,397 @@ img { max-width: 100%; display: block; }
     animation: spin 0.6s linear infinite;
 }
 
+/* === Interactive PDF Editor === */
+.editor-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: var(--gray-800);
+    color: var(--white);
+}
+
+.editor-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 16px;
+    background: var(--gray-900);
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    gap: 8px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    min-height: 48px;
+}
+
+.editor-toolbar-left,
+.editor-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.editor-toolbar-sep {
+    width: 1px;
+    height: 24px;
+    background: rgba(255,255,255,0.15);
+    margin: 0 6px;
+}
+
+.editor-tool-btn {
+    background: none;
+    border: 1px solid transparent;
+    color: rgba(255,255,255,0.7);
+    width: 36px;
+    height: 36px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--transition);
+}
+.editor-tool-btn:hover {
+    background: rgba(255,255,255,0.1);
+    color: var(--white);
+}
+.editor-tool-btn.active {
+    background: var(--primary);
+    color: var(--white);
+    border-color: var(--primary);
+}
+
+.editor-action-btn {
+    background: none;
+    border: none;
+    color: rgba(255,255,255,0.6);
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--transition);
+}
+.editor-action-btn:hover:not(:disabled) {
+    background: rgba(255,255,255,0.1);
+    color: var(--white);
+}
+.editor-action-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.editor-close-btn:hover {
+    background: rgba(231,76,60,0.2);
+    color: var(--primary);
+}
+
+.editor-save-btn {
+    padding: 6px 20px;
+    font-size: 0.875rem;
+}
+
+.editor-tool-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.editor-color-input {
+    width: 28px;
+    height: 28px;
+    border: 2px solid rgba(255,255,255,0.2);
+    border-radius: 6px;
+    cursor: pointer;
+    background: none;
+    padding: 0;
+}
+.editor-color-input::-webkit-color-swatch-wrapper { padding: 2px; }
+.editor-color-input::-webkit-color-swatch { border: none; border-radius: 3px; }
+
+.editor-size-label {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.75rem;
+    color: rgba(255,255,255,0.5);
+}
+
+.editor-size-input {
+    width: 44px;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 4px;
+    color: var(--white);
+    font-size: 0.8125rem;
+    padding: 3px 6px;
+    text-align: center;
+    font-family: inherit;
+}
+.editor-size-input:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
+/* Editor Main Area */
+.editor-main {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.editor-sidebar {
+    width: 120px;
+    flex-shrink: 0;
+    background: var(--gray-900);
+    border-right: 1px solid rgba(255,255,255,0.1);
+    overflow-y: auto;
+    padding: 12px 8px;
+}
+
+.editor-sidebar-pages {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.editor-thumb {
+    position: relative;
+    cursor: pointer;
+    border: 2px solid transparent;
+    border-radius: 4px;
+    overflow: hidden;
+    transition: border-color 0.15s ease;
+    background: var(--white);
+}
+.editor-thumb:hover { border-color: rgba(255,255,255,0.4); }
+.editor-thumb.active { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(231,76,60,0.3); }
+
+.editor-thumb canvas {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+.editor-thumb-label {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 0.625rem;
+    font-weight: 600;
+    color: var(--gray-600);
+    background: rgba(255,255,255,0.85);
+    padding: 1px 0;
+}
+
+/* Canvas Area */
+.editor-canvas-area {
+    flex: 1;
+    overflow: auto;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 24px;
+    background:
+        linear-gradient(45deg, #2a2a2a 25%, transparent 25%),
+        linear-gradient(-45deg, #2a2a2a 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #2a2a2a 75%),
+        linear-gradient(-45deg, transparent 75%, #2a2a2a 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+    background-color: #252525;
+}
+
+.editor-canvas-wrapper {
+    position: relative;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+    line-height: 0;
+    flex-shrink: 0;
+}
+
+.editor-canvas-wrapper canvas {
+    display: block;
+}
+
+#editorOverlayCanvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+
+/* Text input overlay on canvas */
+.editor-text-input {
+    position: absolute;
+    background: rgba(255,255,255,0.95);
+    border: 2px solid var(--primary);
+    border-radius: 3px;
+    padding: 2px 6px;
+    outline: none;
+    font-family: Helvetica, Arial, sans-serif;
+    min-width: 120px;
+    z-index: 10;
+}
+
+/* Bottom Bar */
+.editor-bottombar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 16px;
+    background: var(--gray-900);
+    border-top: 1px solid rgba(255,255,255,0.1);
+    flex-shrink: 0;
+    font-size: 0.8125rem;
+}
+
+.editor-page-nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.editor-page-info { color: rgba(255,255,255,0.6); }
+
+.editor-nav-btn {
+    background: rgba(255,255,255,0.1);
+    border: none;
+    color: rgba(255,255,255,0.7);
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    transition: var(--transition);
+}
+.editor-nav-btn:hover:not(:disabled) {
+    background: rgba(255,255,255,0.2);
+    color: var(--white);
+}
+.editor-nav-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.editor-zoom {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: rgba(255,255,255,0.6);
+}
+
+.editor-file-info {
+    color: rgba(255,255,255,0.4);
+    max-width: 200px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Signature Pad Modal */
+.sig-pad-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    background: rgba(0,0,0,0);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s ease, background 0.2s ease;
+    pointer-events: none;
+}
+.sig-pad-overlay.active {
+    opacity: 1;
+    background: rgba(0,0,0,0.6);
+    pointer-events: auto;
+}
+
+.sig-pad-modal {
+    background: var(--white);
+    border-radius: var(--radius);
+    padding: 24px;
+    box-shadow: var(--shadow-xl);
+    text-align: center;
+    max-width: 460px;
+    width: 90vw;
+}
+
+.sig-pad-modal h3 {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--gray-800);
+    margin-bottom: 16px;
+}
+
+#sigPadCanvas {
+    border: 2px solid var(--gray-300);
+    border-radius: var(--radius-sm);
+    cursor: crosshair;
+    background: var(--white);
+    width: 100%;
+    max-width: 400px;
+    touch-action: none;
+}
+
+.sig-pad-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    margin-top: 16px;
+    flex-wrap: wrap;
+}
+.sig-pad-actions .btn {
+    padding: 8px 20px;
+    font-size: 0.875rem;
+}
+
+/* Editor responsive */
+@media (max-width: 768px) {
+    .editor-sidebar {
+        width: 80px;
+        padding: 8px 4px;
+    }
+
+    .editor-toolbar {
+        padding: 4px 8px;
+    }
+
+    .editor-toolbar-left {
+        flex-wrap: wrap;
+    }
+
+    .editor-tool-btn {
+        width: 32px;
+        height: 32px;
+    }
+
+    .editor-canvas-area {
+        padding: 12px;
+    }
+
+    .editor-file-info {
+        display: none;
+    }
+
+    .editor-bottombar {
+        flex-wrap: wrap;
+        gap: 4px;
+        justify-content: center;
+    }
+}
+
+@media (max-width: 480px) {
+    .editor-sidebar {
+        display: none;
+    }
+}
+
 /* === PDF Preview Modal === */
 .pdf-preview-overlay {
     position: fixed;

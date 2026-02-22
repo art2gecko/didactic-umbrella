@@ -39,6 +39,9 @@ const state = {
     processing: false,
 };
 
+// Editor tools that open the interactive editor
+const EDITOR_TOOL_IDS = ['edit', 'sign', 'redact'];
+
 // ── Router ────────────────────────────────────────────────────────
 function getRoute() {
     const hash = window.location.hash.slice(1) || '/';
@@ -239,8 +242,15 @@ function handleFiles(newFiles, tool) {
         state.files = [...state.files, ...newFiles];
     }
 
-    // Show interactive preview for single-PDF tools
     const isPdfFile = state.files.length > 0 && state.files[0].type === 'application/pdf';
+
+    // Open interactive editor for edit/sign/redact tools
+    if (EDITOR_TOOL_IDS.includes(tool.id) && isPdfFile) {
+        openEditor(tool);
+        return;
+    }
+
+    // Show interactive preview for single-PDF tools
     const isSinglePdfTool = tool.accept === '.pdf' && !tool.multi && isPdfFile;
     if (isSinglePdfTool) {
         showPdfPreview(tool);
@@ -1390,6 +1400,893 @@ function parsePageRanges(input, totalPages) {
     });
 
     return Array.from(pages).sort((a, b) => a - b);
+}
+
+// ── Interactive PDF Editor ─────────────────────────────────────────
+
+const editorState = {
+    pdf: null,
+    pdfBytes: null,
+    currentPage: 1,
+    totalPages: 0,
+    scale: 1.5,
+    activeTool: 'select',
+    annotations: [],
+    undoStack: [],
+    redoStack: [],
+    isDrawing: false,
+    drawStart: null,
+    currentPath: [],
+    selectedAnnotation: null,
+    color: '#000000',
+    fontSize: 16,
+    lineWidth: 2,
+};
+
+async function openEditor(tool) {
+    const file = state.files[0];
+    const arrayBuffer = await readFileAsArrayBuffer(file);
+    editorState.pdfBytes = new Uint8Array(arrayBuffer);
+
+    if (typeof pdfjsLib === 'undefined') {
+        alert('PDF.js library failed to load. Cannot open editor.');
+        return;
+    }
+
+    try {
+        editorState.pdf = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise;
+        editorState.totalPages = editorState.pdf.numPages;
+        editorState.currentPage = 1;
+        editorState.annotations = [];
+        editorState.undoStack = [];
+        editorState.redoStack = [];
+        editorState.selectedAnnotation = null;
+        editorState.color = '#000000';
+        editorState.fontSize = 16;
+        editorState.lineWidth = 2;
+
+        // Set default tool based on which tool opened the editor
+        if (tool.id === 'sign') editorState.activeTool = 'signature';
+        else if (tool.id === 'redact') editorState.activeTool = 'eraser';
+        else editorState.activeTool = 'text';
+
+    } catch (e) {
+        alert('Could not load PDF: ' + e.message);
+        return;
+    }
+
+    const app = document.getElementById('app');
+    app.innerHTML = renderEditorHTML(file);
+    document.querySelector('.navbar').style.display = 'none';
+    document.querySelector('.footer').style.display = 'none';
+    initEditor();
+}
+
+function renderEditorHTML(file) {
+    return `
+    <div class="editor-container">
+        <div class="editor-toolbar">
+            <div class="editor-toolbar-left">
+                <button class="editor-tool-btn" data-tool="select" title="Select & Move">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/></svg>
+                </button>
+                <button class="editor-tool-btn" data-tool="text" title="Add Text">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg>
+                </button>
+                <button class="editor-tool-btn" data-tool="eraser" title="Redact / Erase">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+                </button>
+                <button class="editor-tool-btn" data-tool="highlight" title="Highlight">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="8" width="18" height="8" rx="1" fill="#FFEB3B" opacity="0.5"/><path d="M3 8h18v8H3z"/></svg>
+                </button>
+                <button class="editor-tool-btn" data-tool="freehand" title="Freehand Draw">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17c3-3 6 2 9-1s3-5 6-4" stroke-linecap="round"/></svg>
+                </button>
+                <button class="editor-tool-btn" data-tool="signature" title="Add Signature">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 19c3-3 4-6 8-4s4 3 7 1 4-4 5-5" stroke-linecap="round"/><line x1="2" y1="22" x2="22" y2="22"/></svg>
+                </button>
+                <div class="editor-toolbar-sep"></div>
+                <div class="editor-tool-group">
+                    <label title="Color"><input type="color" id="editorColor" value="#000000" class="editor-color-input"></label>
+                    <label title="Font Size" class="editor-size-label">
+                        <input type="number" id="editorFontSize" value="16" min="6" max="120" class="editor-size-input">
+                        <span>px</span>
+                    </label>
+                </div>
+            </div>
+            <div class="editor-toolbar-right">
+                <button class="editor-action-btn" id="editorUndo" title="Undo (Ctrl+Z)">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10h13a4 4 0 0 1 0 8H10"/><polyline points="7 6 3 10 7 14"/></svg>
+                </button>
+                <button class="editor-action-btn" id="editorRedo" title="Redo (Ctrl+Y)">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10H8a4 4 0 0 0 0 8h6"/><polyline points="17 6 21 10 17 14"/></svg>
+                </button>
+                <div class="editor-toolbar-sep"></div>
+                <button class="btn btn-primary editor-save-btn" id="editorSave">Save PDF</button>
+                <button class="editor-action-btn editor-close-btn" id="editorClose" title="Close Editor">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+        </div>
+        <div class="editor-main">
+            <div class="editor-sidebar" id="editorSidebar">
+                <div class="editor-sidebar-pages" id="editorThumbs"></div>
+            </div>
+            <div class="editor-canvas-area" id="editorCanvasArea">
+                <div class="editor-canvas-wrapper" id="editorCanvasWrapper">
+                    <canvas id="editorBgCanvas"></canvas>
+                    <canvas id="editorOverlayCanvas"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="editor-bottombar">
+            <div class="editor-page-nav">
+                <button class="editor-nav-btn" id="editorPrev" title="Previous Page">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                <span class="editor-page-info">Page <span id="editorPageNum">1</span> of <span id="editorPageTotal">${editorState.totalPages}</span></span>
+                <button class="editor-nav-btn" id="editorNext" title="Next Page">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+            </div>
+            <div class="editor-zoom">
+                <button class="editor-nav-btn" id="editorZoomOut" title="Zoom Out">-</button>
+                <span id="editorZoomLevel">${Math.round(editorState.scale * 100)}%</span>
+                <button class="editor-nav-btn" id="editorZoomIn" title="Zoom In">+</button>
+            </div>
+            <div class="editor-file-info">${escapeHtml(file.name)}</div>
+        </div>
+    </div>
+    `;
+}
+
+function initEditor() {
+    // Tool buttons
+    document.querySelectorAll('.editor-tool-btn').forEach(btn => {
+        btn.addEventListener('click', () => setEditorTool(btn.dataset.tool));
+    });
+    setEditorTool(editorState.activeTool);
+
+    // Color & size
+    document.getElementById('editorColor').addEventListener('input', e => { editorState.color = e.target.value; });
+    document.getElementById('editorFontSize').addEventListener('input', e => { editorState.fontSize = parseInt(e.target.value) || 16; });
+
+    // Navigation
+    document.getElementById('editorPrev').addEventListener('click', () => goToEditorPage(editorState.currentPage - 1));
+    document.getElementById('editorNext').addEventListener('click', () => goToEditorPage(editorState.currentPage + 1));
+
+    // Zoom
+    document.getElementById('editorZoomIn').addEventListener('click', () => setEditorZoom(editorState.scale + 0.25));
+    document.getElementById('editorZoomOut').addEventListener('click', () => setEditorZoom(editorState.scale - 0.25));
+
+    // Undo/Redo
+    document.getElementById('editorUndo').addEventListener('click', editorUndo);
+    document.getElementById('editorRedo').addEventListener('click', editorRedo);
+
+    // Save & Close
+    document.getElementById('editorSave').addEventListener('click', saveEditorPdf);
+    document.getElementById('editorClose').addEventListener('click', closeEditor);
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', editorKeyHandler);
+
+    // Canvas events
+    const overlay = document.getElementById('editorOverlayCanvas');
+    overlay.addEventListener('mousedown', editorMouseDown);
+    overlay.addEventListener('mousemove', editorMouseMove);
+    overlay.addEventListener('mouseup', editorMouseUp);
+    overlay.addEventListener('mouseleave', editorMouseUp);
+
+    // Touch events
+    overlay.addEventListener('touchstart', editorTouchStart, { passive: false });
+    overlay.addEventListener('touchmove', editorTouchMove, { passive: false });
+    overlay.addEventListener('touchend', editorTouchEnd);
+
+    // Render initial page and thumbnails
+    renderEditorPage(editorState.currentPage);
+    renderEditorThumbnails();
+}
+
+function setEditorTool(tool) {
+    editorState.activeTool = tool;
+    editorState.selectedAnnotation = null;
+    document.querySelectorAll('.editor-tool-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.tool === tool);
+    });
+    const overlay = document.getElementById('editorOverlayCanvas');
+    if (!overlay) return;
+    const cursors = { select: 'default', text: 'text', eraser: 'crosshair', highlight: 'crosshair', freehand: 'crosshair', signature: 'pointer' };
+    overlay.style.cursor = cursors[tool] || 'default';
+    renderEditorAnnotations();
+}
+
+async function renderEditorPage(pageNum) {
+    const page = await editorState.pdf.getPage(pageNum);
+    const viewport = page.getViewport({ scale: editorState.scale });
+
+    const bgCanvas = document.getElementById('editorBgCanvas');
+    const overlayCanvas = document.getElementById('editorOverlayCanvas');
+
+    bgCanvas.width = viewport.width;
+    bgCanvas.height = viewport.height;
+    overlayCanvas.width = viewport.width;
+    overlayCanvas.height = viewport.height;
+
+    const ctx = bgCanvas.getContext('2d');
+    await page.render({ canvasContext: ctx, viewport }).promise;
+
+    editorState.currentPage = pageNum;
+    document.getElementById('editorPageNum').textContent = pageNum;
+    updateEditorNavButtons();
+    renderEditorAnnotations();
+
+    // Highlight active thumbnail
+    document.querySelectorAll('.editor-thumb').forEach((t, i) => {
+        t.classList.toggle('active', i + 1 === pageNum);
+    });
+}
+
+function renderEditorAnnotations() {
+    const canvas = document.getElementById('editorOverlayCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const pageAnns = editorState.annotations.filter(a => a.page === editorState.currentPage);
+
+    pageAnns.forEach((ann, idx) => {
+        ctx.save();
+        switch (ann.type) {
+            case 'text':
+                ctx.font = `${ann.fontSize * editorState.scale}px ${ann.fontFamily || 'Helvetica, Arial, sans-serif'}`;
+                ctx.fillStyle = ann.color;
+                ctx.fillText(ann.text, ann.x * editorState.scale, ann.y * editorState.scale);
+                break;
+            case 'rect':
+                ctx.fillStyle = ann.color;
+                ctx.globalAlpha = ann.opacity != null ? ann.opacity : 1;
+                ctx.fillRect(ann.x * editorState.scale, ann.y * editorState.scale, ann.w * editorState.scale, ann.h * editorState.scale);
+                break;
+            case 'highlight':
+                ctx.fillStyle = ann.color || '#FFEB3B';
+                ctx.globalAlpha = ann.opacity || 0.35;
+                ctx.fillRect(ann.x * editorState.scale, ann.y * editorState.scale, ann.w * editorState.scale, ann.h * editorState.scale);
+                break;
+            case 'freehand':
+                if (ann.points.length < 2) break;
+                ctx.strokeStyle = ann.color;
+                ctx.lineWidth = (ann.lineWidth || 2) * editorState.scale;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.beginPath();
+                ctx.moveTo(ann.points[0].x * editorState.scale, ann.points[0].y * editorState.scale);
+                for (let i = 1; i < ann.points.length; i++) {
+                    ctx.lineTo(ann.points[i].x * editorState.scale, ann.points[i].y * editorState.scale);
+                }
+                ctx.stroke();
+                break;
+            case 'image':
+                if (ann._img) {
+                    ctx.drawImage(ann._img, ann.x * editorState.scale, ann.y * editorState.scale, ann.w * editorState.scale, ann.h * editorState.scale);
+                }
+                break;
+        }
+
+        // Selection highlight
+        if (editorState.selectedAnnotation === ann) {
+            ctx.globalAlpha = 1;
+            ctx.strokeStyle = '#3498db';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 3]);
+            const bounds = getAnnotationBounds(ann);
+            ctx.strokeRect(bounds.x * editorState.scale - 3, bounds.y * editorState.scale - 3,
+                bounds.w * editorState.scale + 6, bounds.h * editorState.scale + 6);
+            ctx.setLineDash([]);
+        }
+        ctx.restore();
+    });
+}
+
+function getAnnotationBounds(ann) {
+    switch (ann.type) {
+        case 'text': {
+            const approxW = ann.text.length * ann.fontSize * 0.6;
+            return { x: ann.x, y: ann.y - ann.fontSize, w: approxW, h: ann.fontSize * 1.2 };
+        }
+        case 'rect':
+        case 'highlight':
+            return { x: ann.x, y: ann.y, w: ann.w, h: ann.h };
+        case 'freehand': {
+            if (!ann.points.length) return { x: 0, y: 0, w: 0, h: 0 };
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            ann.points.forEach(p => { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); });
+            return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+        }
+        case 'image':
+            return { x: ann.x, y: ann.y, w: ann.w, h: ann.h };
+        default:
+            return { x: 0, y: 0, w: 0, h: 0 };
+    }
+}
+
+async function renderEditorThumbnails() {
+    const container = document.getElementById('editorThumbs');
+    if (!container) return;
+    container.innerHTML = '';
+
+    const maxThumbs = Math.min(editorState.totalPages, 50);
+    for (let i = 1; i <= maxThumbs; i++) {
+        const page = await editorState.pdf.getPage(i);
+        const vp = page.getViewport({ scale: 0.2 });
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'editor-thumb' + (i === editorState.currentPage ? ' active' : '');
+        wrapper.dataset.page = i;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = vp.width;
+        canvas.height = vp.height;
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+
+        const label = document.createElement('span');
+        label.className = 'editor-thumb-label';
+        label.textContent = i;
+
+        wrapper.appendChild(canvas);
+        wrapper.appendChild(label);
+        wrapper.addEventListener('click', () => goToEditorPage(i));
+        container.appendChild(wrapper);
+    }
+}
+
+function goToEditorPage(pageNum) {
+    if (pageNum < 1 || pageNum > editorState.totalPages) return;
+    removeEditorTextInput();
+    renderEditorPage(pageNum);
+}
+
+function updateEditorNavButtons() {
+    const prev = document.getElementById('editorPrev');
+    const next = document.getElementById('editorNext');
+    if (prev) prev.disabled = editorState.currentPage <= 1;
+    if (next) next.disabled = editorState.currentPage >= editorState.totalPages;
+}
+
+function setEditorZoom(newScale) {
+    newScale = Math.max(0.5, Math.min(3, newScale));
+    editorState.scale = newScale;
+    document.getElementById('editorZoomLevel').textContent = Math.round(newScale * 100) + '%';
+    renderEditorPage(editorState.currentPage);
+}
+
+// ── Canvas Event Handling ─────────────────────────────────────────
+
+function getCanvasCoords(e) {
+    const canvas = document.getElementById('editorOverlayCanvas');
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: (e.clientX - rect.left) / editorState.scale,
+        y: (e.clientY - rect.top) / editorState.scale,
+    };
+}
+
+function editorMouseDown(e) {
+    const pos = getCanvasCoords(e);
+    const tool = editorState.activeTool;
+
+    if (tool === 'text') {
+        showEditorTextInput(pos);
+        return;
+    }
+
+    if (tool === 'signature') {
+        openSignaturePad(pos);
+        return;
+    }
+
+    if (tool === 'select') {
+        editorSelectAt(pos);
+        return;
+    }
+
+    // Start drawing for eraser, highlight, freehand
+    editorState.isDrawing = true;
+    editorState.drawStart = pos;
+
+    if (tool === 'freehand') {
+        editorState.currentPath = [pos];
+    }
+}
+
+function editorMouseMove(e) {
+    if (!editorState.isDrawing) return;
+    const pos = getCanvasCoords(e);
+    const tool = editorState.activeTool;
+
+    if (tool === 'freehand') {
+        editorState.currentPath.push(pos);
+        // Draw live preview
+        const canvas = document.getElementById('editorOverlayCanvas');
+        const ctx = canvas.getContext('2d');
+        renderEditorAnnotations();
+        ctx.save();
+        ctx.strokeStyle = editorState.color;
+        ctx.lineWidth = editorState.lineWidth * editorState.scale;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(editorState.currentPath[0].x * editorState.scale, editorState.currentPath[0].y * editorState.scale);
+        for (let i = 1; i < editorState.currentPath.length; i++) {
+            ctx.lineTo(editorState.currentPath[i].x * editorState.scale, editorState.currentPath[i].y * editorState.scale);
+        }
+        ctx.stroke();
+        ctx.restore();
+        return;
+    }
+
+    if (tool === 'eraser' || tool === 'highlight') {
+        // Draw live preview rect
+        renderEditorAnnotations();
+        const canvas = document.getElementById('editorOverlayCanvas');
+        const ctx = canvas.getContext('2d');
+        const start = editorState.drawStart;
+        ctx.save();
+        if (tool === 'eraser') {
+            ctx.fillStyle = editorState.color;
+            ctx.globalAlpha = 1;
+        } else {
+            ctx.fillStyle = '#FFEB3B';
+            ctx.globalAlpha = 0.35;
+        }
+        ctx.fillRect(
+            Math.min(start.x, pos.x) * editorState.scale,
+            Math.min(start.y, pos.y) * editorState.scale,
+            Math.abs(pos.x - start.x) * editorState.scale,
+            Math.abs(pos.y - start.y) * editorState.scale
+        );
+        ctx.restore();
+    }
+}
+
+function editorMouseUp(e) {
+    if (!editorState.isDrawing) return;
+    editorState.isDrawing = false;
+    const tool = editorState.activeTool;
+
+    if (tool === 'freehand' && editorState.currentPath.length > 1) {
+        const ann = {
+            type: 'freehand',
+            page: editorState.currentPage,
+            points: [...editorState.currentPath],
+            color: editorState.color,
+            lineWidth: editorState.lineWidth,
+        };
+        pushAnnotation(ann);
+        editorState.currentPath = [];
+    }
+
+    if ((tool === 'eraser' || tool === 'highlight') && editorState.drawStart) {
+        const pos = e.type === 'mouseleave' ? editorState.drawStart : getCanvasCoords(e);
+        const start = editorState.drawStart;
+        const w = Math.abs(pos.x - start.x);
+        const h = Math.abs(pos.y - start.y);
+        if (w > 2 || h > 2) {
+            const ann = {
+                type: tool === 'eraser' ? 'rect' : 'highlight',
+                page: editorState.currentPage,
+                x: Math.min(start.x, pos.x),
+                y: Math.min(start.y, pos.y),
+                w: w,
+                h: h,
+                color: tool === 'eraser' ? editorState.color : '#FFEB3B',
+                opacity: tool === 'eraser' ? 1 : 0.35,
+            };
+            pushAnnotation(ann);
+        }
+    }
+
+    editorState.drawStart = null;
+    renderEditorAnnotations();
+}
+
+// Touch event wrappers
+function editorTouchStart(e) {
+    e.preventDefault();
+    const touch = e.touches[0];
+    editorMouseDown({ clientX: touch.clientX, clientY: touch.clientY });
+}
+function editorTouchMove(e) {
+    e.preventDefault();
+    const touch = e.touches[0];
+    editorMouseMove({ clientX: touch.clientX, clientY: touch.clientY });
+}
+function editorTouchEnd(e) {
+    const touch = e.changedTouches[0];
+    editorMouseUp({ clientX: touch.clientX, clientY: touch.clientY, type: 'touchend' });
+}
+
+// ── Text Input ────────────────────────────────────────────────────
+
+function showEditorTextInput(pos) {
+    removeEditorTextInput();
+    const wrapper = document.getElementById('editorCanvasWrapper');
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'editor-text-input';
+    input.style.left = (pos.x * editorState.scale) + 'px';
+    input.style.top = (pos.y * editorState.scale - editorState.fontSize * editorState.scale) + 'px';
+    input.style.fontSize = (editorState.fontSize * editorState.scale) + 'px';
+    input.style.color = editorState.color;
+    input.placeholder = 'Type here...';
+
+    const commitText = () => {
+        const text = input.value.trim();
+        if (text) {
+            pushAnnotation({
+                type: 'text',
+                page: editorState.currentPage,
+                x: pos.x,
+                y: pos.y,
+                text: text,
+                fontSize: editorState.fontSize,
+                color: editorState.color,
+                fontFamily: 'Helvetica, Arial, sans-serif',
+            });
+            renderEditorAnnotations();
+        }
+        input.remove();
+    };
+
+    input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); commitText(); }
+        if (e.key === 'Escape') input.remove();
+    });
+    input.addEventListener('blur', commitText);
+
+    wrapper.appendChild(input);
+    input.focus();
+}
+
+function removeEditorTextInput() {
+    const existing = document.querySelector('.editor-text-input');
+    if (existing) existing.remove();
+}
+
+// ── Select Tool ───────────────────────────────────────────────────
+
+function editorSelectAt(pos) {
+    const pageAnns = editorState.annotations.filter(a => a.page === editorState.currentPage);
+    let found = null;
+
+    // Check in reverse order (topmost first)
+    for (let i = pageAnns.length - 1; i >= 0; i--) {
+        const bounds = getAnnotationBounds(pageAnns[i]);
+        if (pos.x >= bounds.x && pos.x <= bounds.x + bounds.w &&
+            pos.y >= bounds.y && pos.y <= bounds.y + bounds.h) {
+            found = pageAnns[i];
+            break;
+        }
+    }
+
+    editorState.selectedAnnotation = found;
+    renderEditorAnnotations();
+}
+
+// ── Signature Pad ─────────────────────────────────────────────────
+
+function openSignaturePad(placePos) {
+    let existing = document.getElementById('sigPadOverlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'sigPadOverlay';
+    overlay.className = 'sig-pad-overlay';
+    overlay.innerHTML = `
+        <div class="sig-pad-modal">
+            <h3>Draw Your Signature</h3>
+            <canvas id="sigPadCanvas" width="400" height="160"></canvas>
+            <div class="sig-pad-actions">
+                <button class="btn btn-secondary" id="sigPadClear">Clear</button>
+                <button class="btn btn-secondary" id="sigPadUpload">Upload Image</button>
+                <input type="file" id="sigPadFile" accept="image/*" style="display:none">
+                <button class="btn btn-primary" id="sigPadDone">Place Signature</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('active'));
+
+    const sigCanvas = document.getElementById('sigPadCanvas');
+    const sigCtx = sigCanvas.getContext('2d');
+    let drawing = false;
+
+    sigCanvas.addEventListener('mousedown', e => {
+        drawing = true;
+        const r = sigCanvas.getBoundingClientRect();
+        sigCtx.beginPath();
+        sigCtx.moveTo(e.clientX - r.left, e.clientY - r.top);
+    });
+    sigCanvas.addEventListener('mousemove', e => {
+        if (!drawing) return;
+        const r = sigCanvas.getBoundingClientRect();
+        sigCtx.lineWidth = 2;
+        sigCtx.lineCap = 'round';
+        sigCtx.strokeStyle = '#000';
+        sigCtx.lineTo(e.clientX - r.left, e.clientY - r.top);
+        sigCtx.stroke();
+    });
+    sigCanvas.addEventListener('mouseup', () => { drawing = false; });
+    sigCanvas.addEventListener('mouseleave', () => { drawing = false; });
+
+    // Touch support for signature pad
+    sigCanvas.addEventListener('touchstart', e => {
+        e.preventDefault();
+        drawing = true;
+        const r = sigCanvas.getBoundingClientRect();
+        const t = e.touches[0];
+        sigCtx.beginPath();
+        sigCtx.moveTo(t.clientX - r.left, t.clientY - r.top);
+    }, { passive: false });
+    sigCanvas.addEventListener('touchmove', e => {
+        e.preventDefault();
+        if (!drawing) return;
+        const r = sigCanvas.getBoundingClientRect();
+        const t = e.touches[0];
+        sigCtx.lineWidth = 2;
+        sigCtx.lineCap = 'round';
+        sigCtx.strokeStyle = '#000';
+        sigCtx.lineTo(t.clientX - r.left, t.clientY - r.top);
+        sigCtx.stroke();
+    }, { passive: false });
+    sigCanvas.addEventListener('touchend', () => { drawing = false; });
+
+    document.getElementById('sigPadClear').addEventListener('click', () => {
+        sigCtx.clearRect(0, 0, 400, 160);
+    });
+
+    document.getElementById('sigPadUpload').addEventListener('click', () => {
+        document.getElementById('sigPadFile').click();
+    });
+
+    document.getElementById('sigPadFile').addEventListener('change', e => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const img = new Image();
+        img.onload = () => {
+            sigCtx.clearRect(0, 0, 400, 160);
+            const ratio = Math.min(400 / img.width, 160 / img.height);
+            const w = img.width * ratio;
+            const h = img.height * ratio;
+            sigCtx.drawImage(img, (400 - w) / 2, (160 - h) / 2, w, h);
+        };
+        img.src = URL.createObjectURL(file);
+    });
+
+    document.getElementById('sigPadDone').addEventListener('click', () => {
+        const dataUrl = sigCanvas.toDataURL('image/png');
+        const img = new Image();
+        img.onload = () => {
+            const sigW = 200;
+            const sigH = 80;
+            const ann = {
+                type: 'image',
+                page: editorState.currentPage,
+                x: placePos.x,
+                y: placePos.y,
+                w: sigW,
+                h: sigH,
+                dataUrl: dataUrl,
+                _img: img,
+            };
+            pushAnnotation(ann);
+            renderEditorAnnotations();
+        };
+        img.src = dataUrl;
+        overlay.classList.remove('active');
+        setTimeout(() => overlay.remove(), 200);
+    });
+
+    overlay.addEventListener('click', e => {
+        if (e.target === overlay) {
+            overlay.classList.remove('active');
+            setTimeout(() => overlay.remove(), 200);
+        }
+    });
+}
+
+// ── Undo / Redo ───────────────────────────────────────────────────
+
+function pushAnnotation(ann) {
+    editorState.undoStack.push([...editorState.annotations.map(a => ({ ...a }))]);
+    editorState.redoStack = [];
+    editorState.annotations.push(ann);
+    updateUndoRedoButtons();
+}
+
+function editorUndo() {
+    if (!editorState.undoStack.length) return;
+    editorState.redoStack.push([...editorState.annotations.map(a => ({ ...a }))]);
+    editorState.annotations = editorState.undoStack.pop();
+    // Restore image objects for image annotations
+    editorState.annotations.forEach(ann => {
+        if (ann.type === 'image' && ann.dataUrl && !ann._img) {
+            const img = new Image();
+            img.onload = () => { ann._img = img; renderEditorAnnotations(); };
+            img.src = ann.dataUrl;
+        }
+    });
+    editorState.selectedAnnotation = null;
+    renderEditorAnnotations();
+    updateUndoRedoButtons();
+}
+
+function editorRedo() {
+    if (!editorState.redoStack.length) return;
+    editorState.undoStack.push([...editorState.annotations.map(a => ({ ...a }))]);
+    editorState.annotations = editorState.redoStack.pop();
+    editorState.annotations.forEach(ann => {
+        if (ann.type === 'image' && ann.dataUrl && !ann._img) {
+            const img = new Image();
+            img.onload = () => { ann._img = img; renderEditorAnnotations(); };
+            img.src = ann.dataUrl;
+        }
+    });
+    editorState.selectedAnnotation = null;
+    renderEditorAnnotations();
+    updateUndoRedoButtons();
+}
+
+function updateUndoRedoButtons() {
+    const undo = document.getElementById('editorUndo');
+    const redo = document.getElementById('editorRedo');
+    if (undo) undo.disabled = editorState.undoStack.length === 0;
+    if (redo) redo.disabled = editorState.redoStack.length === 0;
+}
+
+function editorKeyHandler(e) {
+    // Only handle when editor is open
+    if (!document.getElementById('editorOverlayCanvas')) return;
+
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        e.preventDefault();
+        editorUndo();
+    } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'Z'))) {
+        e.preventDefault();
+        editorRedo();
+    } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (editorState.selectedAnnotation && !document.querySelector('.editor-text-input:focus')) {
+            e.preventDefault();
+            editorState.undoStack.push([...editorState.annotations.map(a => ({ ...a }))]);
+            editorState.redoStack = [];
+            editorState.annotations = editorState.annotations.filter(a => a !== editorState.selectedAnnotation);
+            editorState.selectedAnnotation = null;
+            renderEditorAnnotations();
+            updateUndoRedoButtons();
+        }
+    } else if (e.key === 'Escape') {
+        removeEditorTextInput();
+        editorState.selectedAnnotation = null;
+        renderEditorAnnotations();
+    }
+}
+
+// ── Save PDF ──────────────────────────────────────────────────────
+
+async function saveEditorPdf() {
+    const saveBtn = document.getElementById('editorSave');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+
+    try {
+        const { PDFDocument, StandardFonts, rgb } = PDFLib;
+        const doc = await PDFDocument.load(editorState.pdfBytes, { ignoreEncryption: true });
+        const font = await doc.embedFont(StandardFonts.Helvetica);
+        const pages = doc.getPages();
+
+        for (const ann of editorState.annotations) {
+            const pageIdx = ann.page - 1;
+            if (pageIdx < 0 || pageIdx >= pages.length) continue;
+            const page = pages[pageIdx];
+            const { height: pageHeight } = page.getSize();
+
+            switch (ann.type) {
+                case 'text': {
+                    const pdfX = ann.x;
+                    const pdfY = pageHeight - ann.y;
+                    const c = hexToRgb(ann.color);
+                    page.drawText(ann.text, {
+                        x: pdfX,
+                        y: pdfY,
+                        size: ann.fontSize,
+                        font: font,
+                        color: rgb(c.r, c.g, c.b),
+                    });
+                    break;
+                }
+                case 'rect': {
+                    const c = hexToRgb(ann.color);
+                    page.drawRectangle({
+                        x: ann.x,
+                        y: pageHeight - ann.y - ann.h,
+                        width: ann.w,
+                        height: ann.h,
+                        color: rgb(c.r, c.g, c.b),
+                        opacity: ann.opacity != null ? ann.opacity : 1,
+                    });
+                    break;
+                }
+                case 'highlight': {
+                    const c = hexToRgb(ann.color || '#FFEB3B');
+                    page.drawRectangle({
+                        x: ann.x,
+                        y: pageHeight - ann.y - ann.h,
+                        width: ann.w,
+                        height: ann.h,
+                        color: rgb(c.r, c.g, c.b),
+                        opacity: ann.opacity || 0.35,
+                    });
+                    break;
+                }
+                case 'freehand': {
+                    if (ann.points.length < 2) break;
+                    const c = hexToRgb(ann.color);
+                    for (let i = 0; i < ann.points.length - 1; i++) {
+                        page.drawLine({
+                            start: { x: ann.points[i].x, y: pageHeight - ann.points[i].y },
+                            end: { x: ann.points[i + 1].x, y: pageHeight - ann.points[i + 1].y },
+                            thickness: ann.lineWidth || 2,
+                            color: rgb(c.r, c.g, c.b),
+                        });
+                    }
+                    break;
+                }
+                case 'image': {
+                    if (!ann.dataUrl) break;
+                    const pngData = await fetch(ann.dataUrl).then(r => r.arrayBuffer());
+                    const pngImage = await doc.embedPng(pngData);
+                    page.drawImage(pngImage, {
+                        x: ann.x,
+                        y: pageHeight - ann.y - ann.h,
+                        width: ann.w,
+                        height: ann.h,
+                    });
+                    break;
+                }
+            }
+        }
+
+        const pdfBytes = await doc.save();
+        downloadBlob(new Blob([pdfBytes], { type: 'application/pdf' }), 'edited.pdf');
+    } catch (err) {
+        alert('Failed to save PDF: ' + err.message);
+        console.error(err);
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save PDF';
+    }
+}
+
+function hexToRgb(hex) {
+    hex = hex.replace('#', '');
+    if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+    const n = parseInt(hex, 16);
+    return { r: ((n >> 16) & 255) / 255, g: ((n >> 8) & 255) / 255, b: (n & 255) / 255 };
+}
+
+function closeEditor() {
+    const hasEdits = editorState.annotations.length > 0;
+    if (hasEdits && !confirm('You have unsaved changes. Close the editor?')) return;
+
+    document.removeEventListener('keydown', editorKeyHandler);
+    document.querySelector('.navbar').style.display = '';
+    document.querySelector('.footer').style.display = '';
+
+    // Re-render the tool page
+    const tool = state.currentTool;
+    const app = document.getElementById('app');
+    state.files = [];
+    app.innerHTML = renderToolPage(tool);
+    initToolPage(tool);
 }
 
 // ── PDF Preview ───────────────────────────────────────────────────
