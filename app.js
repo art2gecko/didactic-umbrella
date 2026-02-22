@@ -1421,6 +1421,9 @@ const editorState = {
     color: '#000000',
     fontSize: 16,
     lineWidth: 2,
+    bold: false,
+    italic: false,
+    fontFamily: 'Helvetica, Arial, sans-serif',
 };
 
 async function openEditor(tool) {
@@ -1590,6 +1593,8 @@ function initEditor() {
 function setEditorTool(tool) {
     editorState.activeTool = tool;
     editorState.selectedAnnotation = null;
+    removeTextToolbar();
+    removeEditorTextInput();
     document.querySelectorAll('.editor-tool-btn').forEach(b => {
         b.classList.toggle('active', b.dataset.tool === tool);
     });
@@ -1637,10 +1642,13 @@ function renderEditorAnnotations() {
     pageAnns.forEach((ann, idx) => {
         ctx.save();
         switch (ann.type) {
-            case 'text':
-                ctx.font = `${ann.fontSize * editorState.scale}px ${ann.fontFamily || 'Helvetica, Arial, sans-serif'}`;
+            case 'text': {
+                const weight = ann.bold ? 'bold' : 'normal';
+                const style = ann.italic ? 'italic' : 'normal';
+                ctx.font = `${style} ${weight} ${ann.fontSize * editorState.scale}px ${ann.fontFamily || 'Helvetica, Arial, sans-serif'}`;
                 ctx.fillStyle = ann.color;
                 ctx.fillText(ann.text, ann.x * editorState.scale, ann.y * editorState.scale);
+            }
                 break;
             case 'rect':
                 ctx.fillStyle = ann.color;
@@ -1909,6 +1917,7 @@ function editorTouchEnd(e) {
 
 function showEditorTextInput(pos) {
     removeEditorTextInput();
+    removeTextToolbar();
     const wrapper = document.getElementById('editorCanvasWrapper');
     const input = document.createElement('input');
     input.type = 'text';
@@ -1917,6 +1926,9 @@ function showEditorTextInput(pos) {
     input.style.top = (pos.y * editorState.scale - editorState.fontSize * editorState.scale) + 'px';
     input.style.fontSize = (editorState.fontSize * editorState.scale) + 'px';
     input.style.color = editorState.color;
+    input.style.fontFamily = editorState.fontFamily;
+    input.style.fontWeight = editorState.bold ? 'bold' : 'normal';
+    input.style.fontStyle = editorState.italic ? 'italic' : 'normal';
     input.placeholder = 'Type here...';
 
     const commitText = () => {
@@ -1930,26 +1942,235 @@ function showEditorTextInput(pos) {
                 text: text,
                 fontSize: editorState.fontSize,
                 color: editorState.color,
-                fontFamily: 'Helvetica, Arial, sans-serif',
+                fontFamily: editorState.fontFamily,
+                bold: editorState.bold,
+                italic: editorState.italic,
             });
             renderEditorAnnotations();
         }
         input.remove();
+        removeTextToolbar();
     };
 
     input.addEventListener('keydown', e => {
         if (e.key === 'Enter') { e.preventDefault(); commitText(); }
-        if (e.key === 'Escape') input.remove();
+        if (e.key === 'Escape') { input.remove(); removeTextToolbar(); }
     });
-    input.addEventListener('blur', commitText);
+    input.addEventListener('blur', (e) => {
+        // Don't commit if clicking on the toolbar
+        if (e.relatedTarget && e.relatedTarget.closest('.editor-text-toolbar')) {
+            input.focus();
+            return;
+        }
+        commitText();
+    });
 
     wrapper.appendChild(input);
     input.focus();
+
+    // Show floating toolbar for the new text input
+    showTextToolbar(null, { inputPos: pos });
 }
 
 function removeEditorTextInput() {
     const existing = document.querySelector('.editor-text-input');
     if (existing) existing.remove();
+}
+
+// ── Floating Text Toolbar ─────────────────────────────────────────
+
+function showTextToolbar(ann, opts) {
+    removeTextToolbar();
+    const wrapper = document.getElementById('editorCanvasWrapper');
+    if (!wrapper) return;
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'editor-text-toolbar';
+    toolbar.addEventListener('mousedown', e => {
+        // Prevent blur on text input for buttons, but allow native inputs to work
+        if (e.target.tagName !== 'SELECT' && e.target.tagName !== 'INPUT') {
+            e.preventDefault();
+        }
+        e.stopPropagation();
+    });
+    toolbar.addEventListener('pointerdown', e => e.stopPropagation());
+
+    // Determine current values
+    const isBold = ann ? ann.bold : editorState.bold;
+    const isItalic = ann ? ann.italic : editorState.italic;
+    const fontFamily = ann ? (ann.fontFamily || 'Helvetica, Arial, sans-serif') : editorState.fontFamily;
+    const fontSize = ann ? ann.fontSize : editorState.fontSize;
+    const color = ann ? ann.color : editorState.color;
+
+    // Map font family string to short name for dropdown
+    const fontKey = fontFamily.toLowerCase().includes('courier') ? 'Courier' :
+                    fontFamily.toLowerCase().includes('times') ? 'Times Roman' : 'Helvetica';
+
+    toolbar.innerHTML = `
+        <button class="ett-btn ett-bold${isBold ? ' active' : ''}" title="Bold" data-action="bold">B</button>
+        <button class="ett-btn ett-italic${isItalic ? ' active' : ''}" title="Italic" data-action="italic">I</button>
+        <div class="ett-sep"></div>
+        <select class="ett-font-select" data-action="fontFamily" title="Font Family">
+            <option value="Helvetica, Arial, sans-serif"${fontKey === 'Helvetica' ? ' selected' : ''}>Helvetica</option>
+            <option value="Times New Roman, Times, serif"${fontKey === 'Times Roman' ? ' selected' : ''}>Times Roman</option>
+            <option value="Courier New, Courier, monospace"${fontKey === 'Courier' ? ' selected' : ''}>Courier</option>
+        </select>
+        <div class="ett-sep"></div>
+        <input type="number" class="ett-size-input" value="${fontSize}" min="6" max="120" title="Font Size" data-action="fontSize">
+        <span class="ett-size-label">px</span>
+        <div class="ett-sep"></div>
+        <input type="color" class="ett-color-input" value="${color}" title="Color" data-action="color">
+        <div class="ett-sep"></div>
+        <button class="ett-btn" title="Duplicate" data-action="duplicate">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+        </button>
+        <button class="ett-btn ett-delete" title="Delete" data-action="delete">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
+        </button>
+    `;
+
+    // Position the toolbar above the annotation or text input
+    let posX, posY;
+    if (ann) {
+        const bounds = getAnnotationBounds(ann);
+        posX = bounds.x * editorState.scale;
+        posY = bounds.y * editorState.scale - 44;
+    } else if (opts && opts.inputPos) {
+        posX = opts.inputPos.x * editorState.scale;
+        posY = opts.inputPos.y * editorState.scale - editorState.fontSize * editorState.scale - 44;
+    }
+    // Clamp to stay within canvas wrapper
+    if (posX < 0) posX = 0;
+    if (posY < 0) posY = 4;
+    toolbar.style.left = posX + 'px';
+    toolbar.style.top = posY + 'px';
+
+    wrapper.appendChild(toolbar);
+
+    // ─── Event handlers ───
+    // Bold toggle
+    toolbar.querySelector('[data-action="bold"]').addEventListener('click', () => {
+        if (ann) {
+            editorState.undoStack.push([...editorState.annotations.map(a => ({ ...a }))]);
+            editorState.redoStack = [];
+            ann.bold = !ann.bold;
+            updateUndoRedoButtons();
+            renderEditorAnnotations();
+            showTextToolbar(ann);
+        } else {
+            editorState.bold = !editorState.bold;
+            updateTextInputStyle();
+            refreshToolbarToggle(toolbar, 'bold', editorState.bold);
+        }
+    });
+
+    // Italic toggle
+    toolbar.querySelector('[data-action="italic"]').addEventListener('click', () => {
+        if (ann) {
+            editorState.undoStack.push([...editorState.annotations.map(a => ({ ...a }))]);
+            editorState.redoStack = [];
+            ann.italic = !ann.italic;
+            updateUndoRedoButtons();
+            renderEditorAnnotations();
+            showTextToolbar(ann);
+        } else {
+            editorState.italic = !editorState.italic;
+            updateTextInputStyle();
+            refreshToolbarToggle(toolbar, 'italic', editorState.italic);
+        }
+    });
+
+    // Font family
+    toolbar.querySelector('[data-action="fontFamily"]').addEventListener('change', (e) => {
+        if (ann) {
+            editorState.undoStack.push([...editorState.annotations.map(a => ({ ...a }))]);
+            editorState.redoStack = [];
+            ann.fontFamily = e.target.value;
+            updateUndoRedoButtons();
+            renderEditorAnnotations();
+            showTextToolbar(ann);
+        } else {
+            editorState.fontFamily = e.target.value;
+            updateTextInputStyle();
+        }
+    });
+
+    // Font size
+    toolbar.querySelector('[data-action="fontSize"]').addEventListener('input', (e) => {
+        const val = parseInt(e.target.value) || 16;
+        if (ann) {
+            editorState.undoStack.push([...editorState.annotations.map(a => ({ ...a }))]);
+            editorState.redoStack = [];
+            ann.fontSize = val;
+            updateUndoRedoButtons();
+            renderEditorAnnotations();
+            showTextToolbar(ann);
+        } else {
+            editorState.fontSize = val;
+            document.getElementById('editorFontSize').value = val;
+            updateTextInputStyle();
+        }
+    });
+
+    // Color
+    toolbar.querySelector('[data-action="color"]').addEventListener('input', (e) => {
+        if (ann) {
+            editorState.undoStack.push([...editorState.annotations.map(a => ({ ...a }))]);
+            editorState.redoStack = [];
+            ann.color = e.target.value;
+            updateUndoRedoButtons();
+            renderEditorAnnotations();
+        } else {
+            editorState.color = e.target.value;
+            document.getElementById('editorColor').value = e.target.value;
+            updateTextInputStyle();
+        }
+    });
+
+    // Duplicate
+    toolbar.querySelector('[data-action="duplicate"]').addEventListener('click', () => {
+        if (!ann) return;
+        editorState.undoStack.push([...editorState.annotations.map(a => ({ ...a }))]);
+        editorState.redoStack = [];
+        const clone = { ...ann, x: ann.x + 15, y: ann.y + 15 };
+        editorState.annotations.push(clone);
+        editorState.selectedAnnotation = clone;
+        updateUndoRedoButtons();
+        renderEditorAnnotations();
+        showTextToolbar(clone);
+    });
+
+    // Delete
+    toolbar.querySelector('[data-action="delete"]').addEventListener('click', () => {
+        if (!ann) return;
+        editorState.undoStack.push([...editorState.annotations.map(a => ({ ...a }))]);
+        editorState.redoStack = [];
+        editorState.annotations = editorState.annotations.filter(a => a !== ann);
+        editorState.selectedAnnotation = null;
+        updateUndoRedoButtons();
+        renderEditorAnnotations();
+        removeTextToolbar();
+    });
+}
+
+function removeTextToolbar() {
+    const existing = document.querySelector('.editor-text-toolbar');
+    if (existing) existing.remove();
+}
+
+function refreshToolbarToggle(toolbar, action, active) {
+    const btn = toolbar.querySelector(`[data-action="${action}"]`);
+    if (btn) btn.classList.toggle('active', active);
+}
+
+function updateTextInputStyle() {
+    const input = document.querySelector('.editor-text-input');
+    if (!input) return;
+    input.style.fontSize = (editorState.fontSize * editorState.scale) + 'px';
+    input.style.color = editorState.color;
+    input.style.fontFamily = editorState.fontFamily;
+    input.style.fontWeight = editorState.bold ? 'bold' : 'normal';
+    input.style.fontStyle = editorState.italic ? 'italic' : 'normal';
 }
 
 // ── Select Tool ───────────────────────────────────────────────────
@@ -1970,6 +2191,13 @@ function editorSelectAt(pos) {
 
     editorState.selectedAnnotation = found;
     renderEditorAnnotations();
+
+    // Show floating toolbar for text annotations, hide otherwise
+    if (found && found.type === 'text') {
+        showTextToolbar(found);
+    } else {
+        removeTextToolbar();
+    }
 }
 
 // ── Signature Pad ─────────────────────────────────────────────────
@@ -2162,9 +2390,11 @@ function editorKeyHandler(e) {
             editorState.selectedAnnotation = null;
             renderEditorAnnotations();
             updateUndoRedoButtons();
+            removeTextToolbar();
         }
     } else if (e.key === 'Escape') {
         removeEditorTextInput();
+        removeTextToolbar();
         editorState.selectedAnnotation = null;
         renderEditorAnnotations();
     }
@@ -2180,7 +2410,31 @@ async function saveEditorPdf() {
     try {
         const { PDFDocument, StandardFonts, rgb } = PDFLib;
         const doc = await PDFDocument.load(editorState.pdfBytes, { ignoreEncryption: true });
-        const font = await doc.embedFont(StandardFonts.Helvetica);
+        const fontCache = {};
+        async function getFont(ann) {
+            const family = (ann.fontFamily || '').toLowerCase();
+            let fontName;
+            if (family.includes('courier')) {
+                if (ann.bold && ann.italic) fontName = 'CourierBoldOblique';
+                else if (ann.bold) fontName = 'CourierBold';
+                else if (ann.italic) fontName = 'CourierOblique';
+                else fontName = 'Courier';
+            } else if (family.includes('times')) {
+                if (ann.bold && ann.italic) fontName = 'TimesRomanBoldItalic';
+                else if (ann.bold) fontName = 'TimesRomanBold';
+                else if (ann.italic) fontName = 'TimesRomanItalic';
+                else fontName = 'TimesRoman';
+            } else {
+                if (ann.bold && ann.italic) fontName = 'HelveticaBoldOblique';
+                else if (ann.bold) fontName = 'HelveticaBold';
+                else if (ann.italic) fontName = 'HelveticaOblique';
+                else fontName = 'Helvetica';
+            }
+            if (!fontCache[fontName]) {
+                fontCache[fontName] = await doc.embedFont(StandardFonts[fontName]);
+            }
+            return fontCache[fontName];
+        }
         const pages = doc.getPages();
 
         for (const ann of editorState.annotations) {
@@ -2194,6 +2448,7 @@ async function saveEditorPdf() {
                     const pdfX = ann.x;
                     const pdfY = pageHeight - ann.y;
                     const c = hexToRgb(ann.color);
+                    const font = await getFont(ann);
                     page.drawText(ann.text, {
                         x: pdfX,
                         y: pdfY,

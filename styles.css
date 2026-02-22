@@ -1037,6 +1037,149 @@ img { max-width: 100%; display: block; }
     z-index: 10;
 }
 
+/* Floating Text Formatting Toolbar */
+.editor-text-toolbar {
+    position: absolute;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 5px 8px;
+    background: var(--gray-900, #1a1a2e);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    animation: ettFadeIn 0.15s ease;
+}
+
+@keyframes ettFadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.ett-btn {
+    background: none;
+    border: 1px solid transparent;
+    color: rgba(255,255,255,0.75);
+    width: 28px;
+    height: 28px;
+    border-radius: 5px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    padding: 0;
+}
+.ett-btn:hover {
+    background: rgba(255,255,255,0.1);
+    color: var(--white);
+}
+.ett-btn.active {
+    background: var(--primary, #e74c3c);
+    color: var(--white);
+    border-color: var(--primary, #e74c3c);
+}
+
+.ett-bold {
+    font-weight: 800;
+    font-size: 0.875rem;
+}
+.ett-italic {
+    font-style: italic;
+    font-family: Georgia, serif;
+    font-size: 0.875rem;
+}
+
+.ett-delete:hover {
+    background: rgba(231,76,60,0.25);
+    color: #e74c3c;
+}
+
+.ett-sep {
+    width: 1px;
+    height: 20px;
+    background: rgba(255,255,255,0.12);
+    margin: 0 3px;
+}
+
+.ett-font-select {
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 5px;
+    color: var(--white, #fff);
+    font-size: 0.75rem;
+    padding: 3px 6px;
+    cursor: pointer;
+    outline: none;
+    height: 28px;
+}
+.ett-font-select:focus {
+    border-color: var(--primary, #e74c3c);
+}
+.ett-font-select option {
+    background: #1a1a2e;
+    color: #fff;
+}
+
+.ett-size-input {
+    width: 40px;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 5px;
+    color: var(--white, #fff);
+    font-size: 0.75rem;
+    padding: 3px 4px;
+    text-align: center;
+    outline: none;
+    height: 28px;
+    -moz-appearance: textfield;
+}
+.ett-size-input::-webkit-inner-spin-button,
+.ett-size-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+.ett-size-input:focus {
+    border-color: var(--primary, #e74c3c);
+}
+
+.ett-size-label {
+    color: rgba(255,255,255,0.4);
+    font-size: 0.6875rem;
+    margin-left: -2px;
+}
+
+.ett-color-input {
+    width: 24px;
+    height: 24px;
+    border: 2px solid rgba(255,255,255,0.2);
+    border-radius: 5px;
+    cursor: pointer;
+    background: none;
+    padding: 0;
+}
+.ett-color-input::-webkit-color-swatch-wrapper { padding: 1px; }
+.ett-color-input::-webkit-color-swatch { border: none; border-radius: 3px; }
+
+/* Responsive: shrink toolbar on small screens */
+@media (max-width: 600px) {
+    .editor-text-toolbar {
+        gap: 2px;
+        padding: 4px 6px;
+    }
+    .ett-font-select {
+        max-width: 80px;
+        font-size: 0.6875rem;
+    }
+    .ett-btn {
+        width: 24px;
+        height: 24px;
+    }
+}
+
 /* Bottom Bar */
 .editor-bottombar {
     display: flex;
